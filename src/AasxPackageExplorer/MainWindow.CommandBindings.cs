@@ -550,8 +550,8 @@ namespace AasxPackageExplorer
             if (cmd == "importaml")
                 CommandBinding_ImportAML();
 
-            if (cmd == "exportaml")
-                CommandBinding_ExportAML();
+            if (cmd.StartsWith("exportaml"))
+                CommandBinding_ExportAML(cmd);
 
             if (cmd == "opcuai4aasexport")
                 CommandBinding_ExportOPCUANodeSet();
@@ -2024,8 +2024,27 @@ namespace AasxPackageExplorer
             if (Options.Curr.UseFlyovers) this.CloseFlyover();
         }
 
-        public void CommandBinding_ExportAML()
+        public void CommandBinding_ExportAML(string cmd)
         {
+            // check if a specific Submodel is to be exported
+            AdminShell.Submodel submodel = null;
+            if (cmd == "exportamlbystructure")
+            {
+                VisualElementSubmodelRef ve1 = null;
+                if (DisplayElements.SelectedItem != null && DisplayElements.SelectedItem is VisualElementSubmodelRef)
+                    ve1 = DisplayElements.SelectedItem as VisualElementSubmodelRef;
+
+                if (ve1 == null || ve1.theSubmodel == null || ve1.theEnv == null)
+                {
+                    MessageBoxFlyoutShow(
+                        "No valid SubModel selected for exporting.", "Export AutomationML ..",
+                        AnyUiMessageBoxButton.OK, AnyUiMessageBoxImage.Error);
+                    return;
+                }
+
+                submodel = ve1.theSubmodel;
+            }
+
             // get the output file
             var dlg = new Microsoft.Win32.SaveFileDialog();
             dlg.InitialDirectory = DetermineInitialDirectory(System.AppDomain.CurrentDomain.BaseDirectory);
@@ -2044,8 +2063,14 @@ namespace AasxPackageExplorer
                 if (res == true)
                 {
                     RememberForInitialDirectory(dlg.FileName);
-                    AasxAmlImExport.AmlExport.ExportTo(
-                        _packageCentral.Main, dlg.FileName, tryUseCompactProperties: dlg.FilterIndex == 2);
+
+                    if (cmd == "exportamlbymapping")
+                        AasxAmlImExport.AmlExportMapping.ExportTo(
+                            _packageCentral.Main, dlg.FileName, tryUseCompactProperties: dlg.FilterIndex == 2);
+
+                    if (cmd == "exportamlbystructure")
+                        AasxAmlImExport.AmlExportStruct.ExportTo(
+                            _packageCentral.Main, dlg.FileName, submodel: submodel);
                 }
             }
             catch (Exception ex)

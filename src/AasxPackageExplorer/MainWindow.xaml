@@ -61,7 +61,8 @@
                     <RoutedUICommand x:Key="SubmodelPut" Text="SubmodelPut" />
                     <RoutedUICommand x:Key="BMEcatImport" Text="BMEcatImport" />
                     <RoutedUICommand x:Key="CSVImport" Text="CSVImport" />
-                    <RoutedUICommand x:Key="ExportAML" Text="ExportAML" />
+                    <RoutedUICommand x:Key="ExportAMLbyMapping" Text="ExportAMLbyMapping" />
+                    <RoutedUICommand x:Key="ExportAMLbyStructure" Text="ExportAMLbyStructure" />
                     <RoutedUICommand x:Key="OpcUaImportNodeSet" Text="OpcUaImportNodeSet" />
                     <RoutedUICommand x:Key="OPCUAi4aasExport" Text="OPCUAi4aasExport" />
                     <RoutedUICommand x:Key="OPCUAi4aasImport" Text="OPCUAi4aasImport" />
@@ -222,7 +223,8 @@
         <CommandBinding Command="{StaticResource SubmodelGet}" Executed="CommandBinding_Executed"/>
         <CommandBinding Command="{StaticResource BMEcatImport}" Executed="CommandBinding_Executed"/>
         <CommandBinding Command="{StaticResource CSVImport}" Executed="CommandBinding_Executed"/>
-        <CommandBinding Command="{StaticResource ExportAML}" Executed="CommandBinding_Executed"/>
+        <CommandBinding Command="{StaticResource ExportAMLbyMapping}" Executed="CommandBinding_Executed"/>
+        <CommandBinding Command="{StaticResource ExportAMLbyStructure}" Executed="CommandBinding_Executed"/>
         <CommandBinding Command="{StaticResource OpcUaImportNodeSet}" Executed="CommandBinding_Executed"/>
         <CommandBinding Command="{StaticResource OPCUAi4aasImport}" Executed="CommandBinding_Executed"/>
         <CommandBinding Command="{StaticResource OPCUAi4aasExport}" Executed="CommandBinding_Executed"/>
@@ -353,7 +355,10 @@
                             <MenuItem Header="Read OPC values into SubModel .." Command="{StaticResource OPCRead}"/>
                         </MenuItem>
                         <MenuItem Header="Export ..">
-                            <MenuItem Header="Export AutomationML .." Command="{StaticResource ExportAML}"/>
+                            <MenuItem Header="Export AutomationML ..">
+                                <MenuItem Header="Export AAS by defined mapping .." Command="{StaticResource ExportAMLbyMapping}"/>
+                                <MenuItem Header="Export Submodel by structure .." Command="{StaticResource ExportAMLbyStructure}"/>
+                            </MenuItem>
                             <MenuItem Header="Export Submodel to JSON .." Command="{StaticResource SubmodelWrite}"/>
                             <MenuItem Header="PUT Submodel to URL .." Command="{StaticResource SubmodelPut}"/>
                             <MenuItem Header="Export AAS as i4aas-nodeset .." Command="{StaticResource OPCUAi4aasExport}"/>

@@ -15,7 +15,7 @@ using AdminShell = AdminShellNS.AdminShell;
 using AdminShellPackageEnv = AdminShellNS.AdminShellPackageEnv;
 using AdminShellUtil = AdminShellNS.AdminShellUtil;
 using AdminShellV20 = AdminShellNS.AdminShellV20;
-using AmlExport = AasxAmlImExport.AmlExport;
+using AmlExportMapping = AasxAmlImExport.AmlExportMapping;
 using AmlImport = AasxAmlImExport.AmlImport;
 using Console = System.Console;
 using Exception = System.Exception;
@@ -108,7 +108,7 @@ namespace AasxToolkit
                             {
                                 if (Path.GetExtension(save.Path).ToLower() == ".aml")
                                 {
-                                    AmlExport.ExportTo(
+                                    AmlExportMapping.ExportTo(
                                         package, save.Path, tryUseCompactProperties: false);
                                 }
                                 else

@@ -21,7 +21,12 @@ using Aml.Engine.CAEX;
 
 namespace AasxAmlImExport
 {
-    public static class AmlExport
+    /// <summary>
+    /// This class provides export functionality to AutomationML.
+    /// This class follows the mapping between AAS structural elements and AML defined by the
+    /// AAS/AML working group.
+    /// </summary>
+    public class AmlExportMapping : AmlExportBase
     {
         private class AmlInternalLinkEntity
         {
