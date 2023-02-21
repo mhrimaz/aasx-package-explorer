@@ -53,6 +53,18 @@ namespace AasxIntegrationBase.AasForms
                             "" + rf.idShort, FormMultiplicity.One, rf.semanticId?.GetAsExactlyOneKey(),
                             "" + rf.idShort);
                     }
+                    if (smw.submodelElement is AdminShell.RelationshipElement re)
+                    {
+                        tsme = new FormDescRelationshipElement(
+                            "" + re.idShort, FormMultiplicity.One, re.semanticId?.GetAsExactlyOneKey(),
+                            "" + re.idShort);
+                    }
+                    if (smw.submodelElement is AdminShell.Capability cap)
+                    {
+                        tsme = new FormDescCapability(
+                            "" + cap.idShort, FormMultiplicity.One, cap.semanticId?.GetAsExactlyOneKey(),
+                            "" + cap.idShort);
+                    }
                     if (smw.submodelElement is AdminShell.SubmodelElementCollection smec)
                     {
                         tsme = new FormDescSubmodelElementCollection(
@@ -75,6 +87,10 @@ namespace AasxIntegrationBase.AasForms
                         q = qs?.FindType("FormInfo");
                         if (q != null)
                             tsme.FormInfo = "" + q.value;
+
+                        q = qs?.FindType("FormUrl");
+                        if (q != null)
+                            tsme.FormUrl = "" + q.value;
 
                         q = qs?.FindType("EditIdShort");
                         if (q != null)

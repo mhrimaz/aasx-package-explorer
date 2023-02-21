@@ -680,10 +680,8 @@ namespace AdminShellNS
 
             public string ToString(int format = 0, string delimiter = ",")
             {
-                var res = "";
-                foreach (var k in this)
-                    res += k.ToString(format) + delimiter;
-                return res.TrimEnd(',');
+                var res = string.Join(delimiter, this.Select((k) => k.ToString(format)));
+                return res;
             }
 
             public static KeyList Parse(string input)
@@ -1615,6 +1613,27 @@ namespace AdminShellNS
 
                 // found?
                 return res;
+            }
+
+            public string GetExactStrForLang(string lang)
+            {
+                // start
+                if (lang == null)
+                    return null;
+                string res = null;
+
+                // exact search
+                foreach (var ls in this)
+                    if (ls.lang.Trim().ToLower() == lang)
+                        res = ls.str;
+
+                // found?
+                return res;
+            }
+
+            public bool ContainsLang(string lang)
+            {
+                return GetExactStrForLang(lang) != null;
             }
 
             public bool AllLangSameString()
@@ -5316,6 +5335,12 @@ namespace AdminShellNS
                     this.valueId = new Reference(src.valueId);
             }
 
+            public Qualifier(string type, string value)
+            {
+                this.type = type;
+                this.value = value;
+            }
+
 #if !DoNotUseAasxCompatibilityModels
             public Qualifier(AasxCompatibilityModels.AdminShellV10.Qualifier src)
             {
@@ -5454,6 +5479,17 @@ namespace AdminShellNS
             // ReSharper enable RedundantArgumentDefaultValue
 
             // for convenience methods of Submodel, SubmodelElement
+
+            public static void AddQualifier(
+                ref QualifierCollection qualifiers,
+                Qualifier q)
+            {
+                if (q == null)
+                    return;
+                if (qualifiers == null)
+                    qualifiers = new QualifierCollection();
+                qualifiers.Add(q);
+            }
 
             public static void AddQualifier(
                 ref QualifierCollection qualifiers,
@@ -5643,6 +5679,13 @@ namespace AdminShellNS
             }
 
             public void AddQualifier(
+                Qualifier q)
+            {
+                QualifierCollection.AddQualifier(
+                    ref this.qualifiers, q);
+            }
+
+            public void AddQualifier(
                 string qualifierType = null, string qualifierValue = null, KeyList semanticKeys = null,
                 Reference qualifierValueId = null)
             {
@@ -5815,18 +5858,18 @@ namespace AdminShellNS
 
             public static AdequateElementEnum[] AdequateElementsDataElement =
             {
-            AdequateElementEnum.SubmodelElementCollection, AdequateElementEnum.RelationshipElement,
-            AdequateElementEnum.AnnotatedRelationshipElement, AdequateElementEnum.Capability,
-            AdequateElementEnum.Operation, AdequateElementEnum.BasicEvent, AdequateElementEnum.Entity
-        };
+                AdequateElementEnum.SubmodelElementCollection, AdequateElementEnum.RelationshipElement,
+                AdequateElementEnum.AnnotatedRelationshipElement, AdequateElementEnum.Capability,
+                AdequateElementEnum.Operation, AdequateElementEnum.BasicEvent, AdequateElementEnum.Entity
+            };
 
             public static string[] AdequateElementNames = { "Unknown", "SubmodelElementCollection", "Property",
-            "MultiLanguageProperty", "Range", "File", "Blob", "ReferenceElement", "RelationshipElement",
-            "AnnotatedRelationshipElement", "Capability", "Operation", "BasicEvent", "Entity" };
+                "MultiLanguageProperty", "Range", "File", "Blob", "ReferenceElement", "RelationshipElement",
+                "AnnotatedRelationshipElement", "Capability", "Operation", "BasicEvent", "Entity" };
 
             public static string[] AdequateElementShortName = { null, "SMC", null,
-            "MLP", null, null, null, "Ref", "Rel",
-            "ARel", null, null, "Event", "Entity" };
+                "MLP", null, null, null, "Ref", "Rel",
+                "ARel", null, null, "Event", "Entity" };
 
             // constructors
 
@@ -6290,6 +6333,14 @@ namespace AdminShellNS
                             yield return smw.submodelElement as T;
             }
 
+            public IEnumerable<T> FindAllSemanticIdAs<T>(ConceptDescription cd,
+                Key.MatchMode matchMode = Key.MatchMode.Strict)
+                where T : SubmodelElement
+            {
+                foreach (var x in FindAllSemanticIdAs<T>(cd.GetReference(), matchMode))
+                    yield return x;
+            }
+
             public SubmodelElementWrapper FindFirstSemanticId(
                 Key semId, Type[] allowedTypes = null, Key.MatchMode matchMode = Key.MatchMode.Strict)
             {
@@ -6543,7 +6594,8 @@ namespace AdminShellNS
             // a little more business logic
 
             public T CreateSMEForCD<T>(ConceptDescription cd, string category = null, string idShort = null,
-                string idxTemplate = null, int maxNum = 999, bool addSme = false) where T : SubmodelElement, new()
+                string idxTemplate = null, int maxNum = 999, bool addSme = false, bool isTemplate = false)
+                where T : SubmodelElement, new()
             {
                 // access
                 if (cd == null)
@@ -6571,6 +6623,8 @@ namespace AdminShellNS
                 };
                 if (category != null)
                     sme.category = category;
+                if (isTemplate)
+                    sme.kind = ModelingKind.CreateAsTemplate();
 
                 // if its a SMC, make sure its accessible
                 if (sme is SubmodelElementCollection smc)
@@ -7246,15 +7300,15 @@ namespace AdminShellNS
                     "boolean", "date", "dateTime",
                     "dateTimeStamp", "decimal", "integer", "long", "int", "short", "byte", "nonNegativeInteger",
                     "positiveInteger",
-                    "unsignedLong", "unsignedShort", "unsignedByte", "nonPositiveInteger", "negativeInteger",
-                    "double", "duration",
+                    "unsignedLong", "unsignedInt", "unsignedShort", "unsignedByte", "nonPositiveInteger",
+                    "negativeInteger", "double", "duration",
                     "dayTimeDuration", "yearMonthDuration", "float", "hexBinary", "string", "langString", "time" };
 
             public static string[] ValueTypes_Number = new[] {
                     "decimal", "integer", "long", "int", "short", "byte", "nonNegativeInteger",
                     "positiveInteger",
-                    "unsignedLong", "unsignedShort", "unsignedByte", "nonPositiveInteger", "negativeInteger",
-                    "double", "float" };
+                    "unsignedLong", "unsignedInt", "unsignedShort", "unsignedByte", "nonPositiveInteger",
+                    "negativeInteger", "double", "float" };
 
             public DataElement() { }
 
@@ -7368,6 +7422,13 @@ namespace AdminShellNS
             public Property Set(string type, bool local, string idType, string value)
             {
                 this.valueId = Reference.CreateNew(Key.CreateNew(type, local, idType, value));
+                return this;
+            }
+
+            public Property Set(Qualifier q)
+            {
+                if (q != null)
+                    this.AddQualifier(q);
                 return this;
             }
 
@@ -8140,6 +8201,7 @@ namespace AdminShellNS
 
                 this.ordered = src.ordered;
                 this.allowDuplicates = src.allowDuplicates;
+                this.value = new SubmodelElementWrapperCollection();
                 if (!shallowCopy)
                     foreach (var smw in src.value)
                         value.Add(new SubmodelElementWrapper(smw.submodelElement));
@@ -8740,6 +8802,22 @@ namespace AdminShellNS
                         if (smw.submodelElement.idShort.Trim().ToLower() == idShort.Trim().ToLower())
                             return smw;
                 return null;
+            }
+
+            public T CreateSMEForCD<T>(ConceptDescription cd, string category = null, string idShort = null,
+                string idxTemplate = null, int maxNum = 999, bool addSme = false) where T : SubmodelElement, new()
+            {
+                if (this.statements == null)
+                    this.statements = new SubmodelElementWrapperCollection();
+                return this.statements.CreateSMEForCD<T>(cd, category, idShort, idxTemplate, maxNum, addSme);
+            }
+
+            public T CreateSMEForIdShort<T>(string idShort, string category = null,
+                string idxTemplate = null, int maxNum = 999, bool addSme = false) where T : SubmodelElement, new()
+            {
+                if (this.statements == null)
+                    this.statements = new SubmodelElementWrapperCollection();
+                return this.statements.CreateSMEForIdShort<T>(idShort, category, idxTemplate, maxNum, addSme);
             }
 
             // entity type

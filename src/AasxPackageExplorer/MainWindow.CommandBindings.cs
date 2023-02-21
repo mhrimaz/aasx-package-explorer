@@ -18,6 +18,7 @@ using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Reflection;
+using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -29,6 +30,8 @@ using System.Xml.Serialization;
 using AasxIntegrationBase;
 using AasxPackageLogic;
 using AasxPackageLogic.PackageCentral;
+using AasxPackageLogic.PackageCentral.AasxFileServerInterface;
+using AasxSchemaExport;
 using AasxSignature;
 using AasxUANodesetImExport;
 using AdminShellNS;
@@ -37,6 +40,8 @@ using Jose;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Newtonsoft.Json.Serialization;
+using Org.BouncyCastle.Crypto;
+using Org.Webpki.JsonCanonicalizer;
 
 namespace AasxPackageExplorer
 {
@@ -86,6 +91,128 @@ namespace AasxPackageExplorer
             // redraw everything
             RedrawAllAasxElements();
             RedrawElementView();
+        }
+
+        private static string makeJsonLD(string json, int count)
+        {
+            int total = json.Length;
+            string header = "";
+            string jsonld = "";
+            string name = "";
+            int state = 0;
+            int identification = 0;
+            string id = "idNotFound";
+
+            for (int i = 0; i < total; i++)
+            {
+                var c = json[i];
+                switch (state)
+                {
+                    case 0:
+                        if (c == '"')
+                        {
+                            state = 1;
+                        }
+                        else
+                        {
+                            jsonld += c;
+                        }
+                        break;
+                    case 1:
+                        if (c == '"')
+                        {
+                            state = 2;
+                        }
+                        else
+                        {
+                            name += c;
+                        }
+                        break;
+                    case 2:
+                        if (c == ':')
+                        {
+                            bool skip = false;
+                            string pattern = ": null";
+                            if (i + pattern.Length < total)
+                            {
+                                if (json.Substring(i, pattern.Length) == pattern)
+                                {
+                                    skip = true;
+                                    i += pattern.Length;
+                                    // remove last "," in jsonld if character after null is not ","
+                                    int j = jsonld.Length - 1;
+                                    while (Char.IsWhiteSpace(jsonld[j]))
+                                    {
+                                        j--;
+                                    }
+                                    if (jsonld[j] == ',' && json[i] != ',')
+                                    {
+                                        jsonld = jsonld.Substring(0, j) + "\r\n";
+                                    }
+                                    else
+                                    {
+                                        jsonld = jsonld.Substring(0, j + 1) + "\r\n";
+                                    }
+                                    while (json[i] != '\n')
+                                        i++;
+                                }
+                            }
+
+                            if (!skip)
+                            {
+                                if (name == "identification")
+                                    identification++;
+                                if (name == "id" && identification == 1)
+                                {
+                                    id = "";
+                                    int j = i;
+                                    while (j < json.Length && json[j] != '"')
+                                    {
+                                        j++;
+                                    }
+                                    j++;
+                                    while (j < json.Length && json[j] != '"')
+                                    {
+                                        id += json[j];
+                                        j++;
+                                    }
+                                }
+                                count++;
+                                name += "__" + count;
+                                if (header != "")
+                                    header += ",\r\n";
+                                header += "  \"" + name + "\": " + "\"aio:" + name + "\"";
+                                jsonld += "\"" + name + "\":";
+                            }
+                        }
+                        else
+                        {
+                            jsonld += "\"" + name + "\"" + c;
+                        }
+                        state = 0;
+                        name = "";
+                        break;
+                }
+            }
+
+            string prefix = "  \"aio\": \"https://admin-shell-io.com/ns#\",\r\n";
+            prefix += "  \"I40GenericCredential\": \"aio:I40GenericCredential\",\r\n";
+            prefix += "  \"__AAS\": \"aio:__AAS\",\r\n";
+            header = prefix + header;
+            header = "\"context\": {\r\n" + header + "\r\n},\r\n";
+            int k = jsonld.Length - 2;
+            while (k >= 0 && jsonld[k] != '}' && jsonld[k] != ']')
+            {
+                k--;
+            }
+            #pragma warning disable format
+            jsonld = jsonld.Substring(0, k+1);
+            jsonld += ",\r\n" + "  \"id\": \"" + id + "\"\r\n}\r\n";
+            jsonld = "\"doc\": " + jsonld;
+            jsonld = "{\r\n\r\n" + header + jsonld + "\r\n\r\n}\r\n";
+            #pragma warning restore format
+
+            return jsonld;
         }
 
         private async void CommandBinding_GeneralDispatch(string cmd)
@@ -182,7 +309,7 @@ namespace AasxPackageExplorer
                     CheckIfToFlushEvents();
 
                     // as saving changes the structure of pending supplementary files, re-display
-                    RedrawAllAasxElements();
+                    RedrawAllAasxElements(keepFocus: true);
                 }
                 catch (Exception ex)
                 {
@@ -264,6 +391,8 @@ namespace AasxPackageExplorer
 
                         // preferred format
                         var prefFmt = AdminShellPackageEnv.SerializationFormat.None;
+                        if (dlg.FilterIndex == 1)
+                            prefFmt = AdminShellPackageEnv.SerializationFormat.Xml;
                         if (dlg.FilterIndex == 2)
                             prefFmt = AdminShellPackageEnv.SerializationFormat.Json;
 
@@ -271,12 +400,13 @@ namespace AasxPackageExplorer
                         RememberForInitialDirectory(dlg.FileName);
                         await _packageCentral.MainItem.SaveAsAsync(dlg.FileName, prefFmt: prefFmt);
 
-                        // backup
-                        if (Options.Curr.BackupDir != null)
-                            _packageCentral.MainItem.Container.BackupInDir(
-                                System.IO.Path.GetFullPath(Options.Curr.BackupDir),
-                                Options.Curr.BackupFiles,
-                                PackageContainerBase.BackupType.FullCopy);
+                        // backup (only for AASX)
+                        if (dlg.FilterIndex == 0)
+                            if (Options.Curr.BackupDir != null)
+                                _packageCentral.MainItem.Container.BackupInDir(
+                                    System.IO.Path.GetFullPath(Options.Curr.BackupDir),
+                                    Options.Curr.BackupFiles,
+                                    PackageContainerBase.BackupType.FullCopy);
                         // as saving changes the structure of pending supplementary files, re-display
                         RedrawAllAasxElements();
                     }
@@ -320,8 +450,591 @@ namespace AasxPackageExplorer
                     }
             }
 
-            if ((cmd == "sign" || cmd == "validate" || cmd == "encrypt") && _packageCentral?.Main != null)
+            if ((cmd == "sign" || cmd == "validatecertificate" || cmd == "encrypt") && _packageCentral?.Main != null)
             {
+                VisualElementSubmodelRef el = null;
+                VisualElementSubmodelElement els = null;
+
+                if (DisplayElements.SelectedItem != null && DisplayElements.SelectedItem is VisualElementSubmodelRef)
+                    el = DisplayElements.SelectedItem as VisualElementSubmodelRef;
+
+                if (DisplayElements.SelectedItem != null && DisplayElements.SelectedItem is VisualElementSubmodelElement)
+                    els = DisplayElements.SelectedItem as VisualElementSubmodelElement;
+
+                if (cmd == "sign"
+                    && ((el != null && el.theEnv != null && el.theSubmodel != null)
+                            || (els != null && els.theEnv != null && els.theWrapper != null)))
+                {
+                    AdminShell.Submodel sm = null;
+                    AdminShell.SubmodelElementCollection smc = null;
+                    AdminShell.SubmodelElementCollection smcp = null;
+                    if (el != null)
+                    {
+                        sm = el.theSubmodel;
+                    }
+                    if (els != null)
+                    {
+                        var smee = els.theWrapper.submodelElement;
+                        if (smee is AdminShell.SubmodelElementCollection)
+                        {
+                            smc = smee as AdminShell.SubmodelElementCollection;
+                            var p = smee.parent;
+                            if (p is AdminShell.Submodel)
+                                sm = p as AdminShell.Submodel;
+                            if (p is AdminShell.SubmodelElementCollection)
+                                smcp = p as AdminShell.SubmodelElementCollection;
+                        }
+                    }
+                    if (sm == null && smcp == null)
+                        return;
+
+                    bool useX509 = (AnyUiMessageBoxResult.Yes == MessageBoxFlyoutShow(
+                        "Use X509 (yes) or Verifiable Credential (No)?",
+                        "X509 or VerifiableCredential", AnyUiMessageBoxButton.YesNo, AnyUiMessageBoxImage.Hand));
+
+                    List<AdminShell.SubmodelElementCollection> existing = new List<AdminShellV20.SubmodelElementCollection>();
+                    if (smc == null)
+                    {
+                        for (int i = 0; i < sm.submodelElements.Count; i++)
+                        {
+                            var sme = sm.submodelElements[i];
+                            var len = "signature".Length;
+                            var idShort = sme.submodelElement.idShort;
+                            if (sme.submodelElement is AdminShell.SubmodelElementCollection &&
+                                    idShort.Length >= len &&
+                                    idShort.Substring(0, len).ToLower() == "signature")
+                            {
+                                existing.Add(sme.submodelElement as AdminShell.SubmodelElementCollection);
+                                sm.Remove(sme.submodelElement);
+                                i--; // check next
+                            }
+                        }
+                    }
+                    else
+                    {
+                        for (int i = 0; i < smc.value.Count; i++)
+                        {
+                            var sme = smc.value[i];
+                            var len = "signature".Length;
+                            var idShort = sme.submodelElement.idShort;
+                            if (sme.submodelElement is AdminShell.SubmodelElementCollection &&
+                                    idShort.Length >= len &&
+                                    idShort.Substring(0, len).ToLower() == "signature")
+                            {
+                                existing.Add(sme.submodelElement as AdminShell.SubmodelElementCollection);
+                                smc.Remove(sme.submodelElement);
+                                i--; // check next
+                            }
+                        }
+                    }
+
+                    if (useX509)
+                    {
+                        AdminShell.SubmodelElementCollection smec = AdminShell.SubmodelElementCollection.CreateNew("signature");
+                        AdminShell.Property json = AdminShellV20.Property.CreateNew("submodelJson");
+                        AdminShell.Property canonical = AdminShellV20.Property.CreateNew("submodelJsonCanonical");
+                        AdminShell.Property subject = AdminShellV20.Property.CreateNew("subject");
+                        AdminShell.SubmodelElementCollection x5c = AdminShell.SubmodelElementCollection.CreateNew("x5c");
+                        AdminShell.Property algorithm = AdminShellV20.Property.CreateNew("algorithm");
+                        AdminShell.Property sigT = AdminShellV20.Property.CreateNew("sigT");
+                        AdminShell.Property signature = AdminShellV20.Property.CreateNew("signature");
+                        smec.Add(json);
+                        smec.Add(canonical);
+                        smec.Add(subject);
+                        smec.Add(x5c);
+                        smec.Add(algorithm);
+                        smec.Add(sigT);
+                        smec.Add(signature);
+                        string s = null;
+                        if (smc == null)
+                        {
+                            s = JsonConvert.SerializeObject(sm, Formatting.Indented);
+                        }
+                        else
+                        {
+                            s = JsonConvert.SerializeObject(smc, Formatting.Indented);
+                        }
+                        json.value = s;
+                        JsonCanonicalizer jsonCanonicalizer = new JsonCanonicalizer(s);
+                        string result = jsonCanonicalizer.GetEncodedString();
+                        canonical.value = result;
+                        if (smc == null)
+                        {
+                            foreach (var e in existing)
+                            {
+                                sm.Add(e);
+                            }
+                            sm.Add(smec);
+                        }
+                        else
+                        {
+                            foreach (var e in existing)
+                            {
+                                smc.Add(e);
+                            }
+                            smc.Add(smec);
+                        }
+
+                        X509Store store = new X509Store("MY", StoreLocation.CurrentUser);
+                        store.Open(OpenFlags.ReadOnly | OpenFlags.OpenExistingOnly);
+
+                        X509Certificate2Collection collection = store.Certificates;
+                        X509Certificate2Collection fcollection = collection.Find(
+                            X509FindType.FindByTimeValid, DateTime.Now, false);
+
+                        X509Certificate2Collection scollection = X509Certificate2UI.SelectFromCollection(fcollection,
+                            "Test Certificate Select",
+                            "Select a certificate from the following list to get information on that certificate",
+                            X509SelectionFlag.SingleSelection);
+                        if (scollection.Count != 0)
+                        {
+                            var certificate = scollection[0];
+                            subject.value = certificate.Subject;
+
+                            X509Chain ch = new X509Chain();
+                            ch.Build(certificate);
+
+                            //// string[] X509Base64 = new string[ch.ChainElements.Count];
+
+                            int j = 1;
+                            foreach (X509ChainElement element in ch.ChainElements)
+                            {
+                                AdminShell.Property c = AdminShellV20.Property.CreateNew("certificate_" + j++);
+                                c.value = Convert.ToBase64String(element.Certificate.GetRawCertData());
+                                x5c.Add(c);
+                            }
+
+                            try
+                            {
+                                using (RSA rsa = certificate.GetRSAPrivateKey())
+                                {
+                                    algorithm.value = "RS256";
+                                    byte[] data = Encoding.UTF8.GetBytes(result);
+                                    byte[] signed = rsa.SignData(data, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+                                    signature.value = Convert.ToBase64String(signed);
+                                    sigT.value = DateTime.UtcNow.ToString("yyyy'-'MM'-'dd' 'HH':'mm':'ss");
+                                }
+                            }
+                            // ReSharper disable EmptyGeneralCatchClause
+                            catch
+                            {
+                            }
+                            // ReSharper enable EmptyGeneralCatchClause
+                        }
+                    }
+                    else // Verifiable Credential
+                    {
+                        AdminShell.SubmodelElementCollection smec = AdminShell.SubmodelElementCollection.CreateNew("signature");
+                        AdminShell.Property json = AdminShellV20.Property.CreateNew("submodelJson");
+                        AdminShell.Property jsonld = AdminShellV20.Property.CreateNew("submodelJsonLD");
+                        AdminShell.Property vc = AdminShellV20.Property.CreateNew("vc");
+                        AdminShell.Property epvc = AdminShellV20.Property.CreateNew("endpointVC");
+                        AdminShell.Property algorithm = AdminShellV20.Property.CreateNew("algorithm");
+                        AdminShell.Property sigT = AdminShellV20.Property.CreateNew("sigT");
+                        AdminShell.Property proof = AdminShellV20.Property.CreateNew("proof");
+                        smec.Add(json);
+                        smec.Add(jsonld);
+                        smec.Add(vc);
+                        smec.Add(epvc);
+                        smec.Add(algorithm);
+                        smec.Add(sigT);
+                        smec.Add(proof);
+                        string s = null;
+                        if (smc == null)
+                        {
+                            s = JsonConvert.SerializeObject(sm, Formatting.Indented);
+                        }
+                        else
+                        {
+                            s = JsonConvert.SerializeObject(smc, Formatting.Indented);
+                        }
+                        json.value = s;
+                        s = makeJsonLD(s, 0);
+                        jsonld.value = s;
+
+                        if (smc == null)
+                        {
+                            foreach (var e in existing)
+                            {
+                                sm.Add(e);
+                            }
+                            sm.Add(smec);
+                        }
+                        else
+                        {
+                            foreach (var e in existing)
+                            {
+                                smc.Add(e);
+                            }
+                            smc.Add(smec);
+                        }
+
+                        if (s != null && s != "")
+                        {
+                            epvc.value = "https://nameplate.h2894164.stratoserver.net";
+                            string requestPath = epvc.value + "/demo/sign?create_as_verifiable_presentation=false";
+
+                            var handler = new HttpClientHandler();
+                            handler.DefaultProxyCredentials = CredentialCache.DefaultCredentials;
+
+                            var client = new HttpClient(handler);
+                            client.Timeout = TimeSpan.FromSeconds(60);
+
+                            bool error = false;
+                            HttpResponseMessage response = new HttpResponseMessage();
+                            try
+                            {
+                                var content = new StringContent(s, System.Text.Encoding.UTF8, "application/json");
+                                var task = Task.Run(async () =>
+                                {
+                                    response = await client.PostAsync(
+                                        requestPath, content);
+                                });
+                                task.Wait();
+                                error = !response.IsSuccessStatusCode;
+                            }
+                            catch
+                            {
+                                error = true;
+                            }
+                            if (!error)
+                            {
+                                s = response.Content.ReadAsStringAsync().Result;
+                                vc.value = s;
+
+                                var parsed = JObject.Parse(s);
+
+                                try
+                                {
+                                    var p = parsed.SelectToken("proof").Value<JObject>();
+                                    if (p != null)
+                                        proof.value = JsonConvert.SerializeObject(p, Formatting.Indented);
+                                }
+                                catch
+                                {
+                                    error = true;
+                                }
+                            }
+                            else
+                            {
+                                string r = "ERROR POST; " + response.StatusCode.ToString();
+                                r += " ; " + requestPath;
+                                if (response.Content != null)
+                                    r += " ; " + response.Content.ReadAsStringAsync().Result;
+                                Console.WriteLine(r);
+                                s = r;
+                            }
+                            algorithm.value = "VC";
+                            sigT.value = DateTime.UtcNow.ToString("yyyy'-'MM'-'dd' 'HH':'mm':'ss");
+                        }
+                    }
+                    RedrawAllAasxElements();
+                    RedrawElementView();
+                    return;
+                }
+
+                if (cmd == "validatecertificate"
+                    && ((el != null && el.theEnv != null && el.theSubmodel != null)
+                            || (els != null && els.theEnv != null && els.theWrapper != null)))
+                {
+                    List<AdminShell.SubmodelElementCollection> existing = new List<AdminShellV20.SubmodelElementCollection>();
+                    List<AdminShell.SubmodelElementCollection> validate = new List<AdminShellV20.SubmodelElementCollection>();
+                    AdminShell.Submodel sm = null;
+                    AdminShell.SubmodelElementCollection smc = null;
+                    AdminShell.SubmodelElementCollection smcp = null;
+                    bool smcIsSignature = false;
+                    if (el != null)
+                    {
+                        sm = el.theSubmodel;
+                    }
+                    if (els != null)
+                    {
+                        var smee = els.theWrapper.submodelElement;
+                        if (smee is AdminShell.SubmodelElementCollection)
+                        {
+                            smc = smee as AdminShell.SubmodelElementCollection;
+                            var len = "signature".Length;
+                            var idShort = smc.idShort;
+                            if (idShort.Length >= len &&
+                                    idShort.Substring(0, len).ToLower() == "signature")
+                            {
+                                smcIsSignature = true;
+                            }
+                            var p = smc.parent;
+                            if (smcIsSignature && p is AdminShell.Submodel)
+                                sm = p as AdminShell.Submodel;
+                            if (smcIsSignature && p is AdminShell.SubmodelElementCollection)
+                                smcp = p as AdminShell.SubmodelElementCollection;
+                            if (!smcIsSignature)
+                                smcp = smc;
+                        }
+                    }
+                    if (sm == null && smcp == null)
+                        return;
+
+                    if (sm != null)
+                    {
+                        foreach (var sme in sm.submodelElements)
+                        {
+                            var smee = sme.submodelElement;
+                            var len = "signature".Length;
+                            var idShort = smee.idShort;
+                            if (smee is AdminShell.SubmodelElementCollection &&
+                                    idShort.Length >= len &&
+                                    idShort.Substring(0, len).ToLower() == "signature")
+                            {
+                                existing.Add(smee as AdminShell.SubmodelElementCollection);
+                            }
+                        }
+                    }
+                    if (smcp != null)
+                    {
+                        foreach (var sme in smcp.value)
+                        {
+                            var len = "signature".Length;
+                            var idShort = sme.submodelElement.idShort;
+                            if (sme.submodelElement is AdminShell.SubmodelElementCollection &&
+                                    idShort.Length >= len &&
+                                    idShort.Substring(0, len).ToLower() == "signature")
+                            {
+                                existing.Add(sme.submodelElement as AdminShell.SubmodelElementCollection);
+                            }
+                        }
+                    }
+
+                    if (smcIsSignature)
+                    {
+                        validate.Add(smc);
+                    }
+                    else
+                    {
+                        validate = existing;
+                    }
+
+                    if (validate.Count != 0)
+                    {
+                        X509Store root = new X509Store("Root", StoreLocation.CurrentUser);
+                        root.Open(OpenFlags.ReadWrite);
+                        List<X509Certificate2> rootList = new List<X509Certificate2>();
+
+                        System.IO.DirectoryInfo ParentDirectory = new System.IO.DirectoryInfo(".");
+
+                        // Add additional trusted root certificates temporarilly
+                        if (Directory.Exists("./root"))
+                        {
+                            foreach (System.IO.FileInfo f in ParentDirectory.GetFiles("./root/*.cer"))
+                            {
+                                X509Certificate2 cert = new X509Certificate2("./root/" + f.Name);
+
+                                try
+                                {
+                                    if (!root.Certificates.Contains(cert))
+                                    {
+                                        root.Add(cert);
+                                        rootList.Add(cert);
+                                    }
+                                }
+                                // ReSharper disable EmptyGeneralCatchClause
+                                catch
+                                {
+                                }
+                                // ReSharper enable EmptyGeneralCatchClause
+                            }
+                        }
+
+                        if (smcp == null)
+                        {
+                            foreach (var e in existing)
+                            {
+                                sm.Remove(e);
+                            }
+                        }
+                        else
+                        {
+                            foreach (var e in existing)
+                            {
+                                smcp.Remove(e);
+                            }
+                        }
+                        foreach (var smec in validate)
+                        {
+                            AdminShell.SubmodelElementCollection x5c = null;
+                            AdminShell.Property subject = null;
+                            AdminShell.Property algorithm = null;
+                            AdminShell.Property digest = null; // legacy
+                            AdminShell.Property signature = null;
+
+                            foreach (var sme in smec.value)
+                            {
+                                var smee = sme.submodelElement;
+                                switch (smee.idShort)
+                                {
+                                    case "x5c":
+                                        if (smee is AdminShell.SubmodelElementCollection)
+                                            x5c = smee as AdminShell.SubmodelElementCollection;
+                                        break;
+                                    case "subject":
+                                        subject = smee as AdminShell.Property;
+                                        break;
+                                    case "algorithm":
+                                        algorithm = smee as AdminShell.Property;
+                                        break;
+                                    case "digest":
+                                        digest = smee as AdminShell.Property;
+                                        break;
+                                    case "signature":
+                                        signature = smee as AdminShell.Property;
+                                        break;
+                                }
+                            }
+                            if (smec != null && x5c != null && subject != null && algorithm != null &&
+                                (signature != null || digest != null))
+                            {
+                                string s = null;
+                                if (smcp == null)
+                                {
+                                    s = JsonConvert.SerializeObject(sm, Formatting.Indented);
+                                }
+                                else
+                                {
+                                    s = JsonConvert.SerializeObject(smcp, Formatting.Indented);
+                                }
+                                JsonCanonicalizer jsonCanonicalizer = new JsonCanonicalizer(s);
+                                string result = jsonCanonicalizer.GetEncodedString();
+
+                                X509Store storeCA = new X509Store("CA", StoreLocation.CurrentUser);
+                                storeCA.Open(OpenFlags.ReadWrite);
+                                X509Certificate2Collection xcc = new X509Certificate2Collection();
+                                X509Certificate2 x509 = null;
+                                bool valid = false;
+
+                                try
+                                {
+                                    for (int i = 0; i < x5c.value.Count; i++)
+                                    {
+                                        var p = x5c.value[i].submodelElement as AdminShell.Property;
+                                        var cert = new X509Certificate2(Convert.FromBase64String(p.value));
+                                        if (i == 0)
+                                        {
+                                            x509 = cert;
+                                        }
+                                        if (cert.Subject != cert.Issuer)
+                                        {
+                                            xcc.Add(cert);
+                                            storeCA.Add(cert);
+                                        }
+                                        if (cert.Subject == cert.Issuer)
+                                        {
+                                            try
+                                            {
+                                                if (!root.Certificates.Contains(cert))
+                                                {
+                                                    root.Add(cert);
+                                                    rootList.Add(cert);
+                                                }
+                                            }
+                                            // ReSharper disable EmptyGeneralCatchClause
+                                            catch
+                                            {
+                                            }
+                                            // ReSharper enable EmptyGeneralCatchClause
+                                        }
+                                    }
+
+                                    if (x509 != null)
+                                    {
+                                        X509Chain c = new X509Chain();
+                                        c.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
+
+                                        valid = c.Build(x509);
+                                    }
+
+                                    //// storeCA.RemoveRange(xcc);
+                                }
+                                catch
+                                {
+                                    x509 = null;
+                                    valid = false;
+                                }
+
+                                if (!valid)
+                                {
+                                    System.Windows.MessageBox.Show(
+                                        this, "Invalid certificate chain: " + subject.value, "Check " + smec.idShort,
+                                        MessageBoxButton.OK, MessageBoxImage.Exclamation);
+                                }
+                                if (valid)
+                                {
+                                    valid = false;
+
+                                    if (algorithm.value == "RS256")
+                                    {
+                                        try
+                                        {
+                                            using (RSA rsa = x509.GetRSAPublicKey())
+                                            {
+                                                string value = null;
+                                                if (signature != null)
+                                                    value = signature.value;
+                                                if (digest != null)
+                                                    value = digest.value;
+                                                byte[] data = Encoding.UTF8.GetBytes(result);
+                                                byte[] h = Convert.FromBase64String(value);
+                                                valid = rsa.VerifyData(data, h, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+                                            }
+                                        }
+                                        catch
+                                        {
+                                            valid = false;
+                                        }
+                                        if (!valid)
+                                        {
+                                            System.Windows.MessageBox.Show(
+                                                this, "Invalid signature: " + subject.value, "Check " + smec.idShort,
+                                                MessageBoxButton.OK, MessageBoxImage.Exclamation);
+                                        }
+                                        if (valid)
+                                        {
+                                            System.Windows.MessageBox.Show(
+                                                this, "Signature is valid: " + subject.value, "Check " + smec.idShort,
+                                                MessageBoxButton.OK, MessageBoxImage.Exclamation);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if (smcp == null)
+                        {
+                            foreach (var e in existing)
+                            {
+                                sm.Add(e);
+                            }
+                        }
+                        else
+                        {
+                            foreach (var e in existing)
+                            {
+                                smcp.Add(e);
+                            }
+                        }
+
+                        // Delete additional trusted root certificates immediately
+                        foreach (var cert in rootList)
+                        {
+                            try
+                            {
+                                root.Remove(cert);
+                            }
+                            // ReSharper disable EmptyGeneralCatchClause
+                            catch
+                            {
+                            }
+                            // ReSharper enable EmptyGeneralCatchClause
+                        }
+                    }
+                    return;
+                }
+
                 var dlg = new Microsoft.Win32.OpenFileDialog();
                 dlg.Filter = "AASX package files (*.aasx)|*.aasx";
                 if (Options.Curr.UseFlyovers) this.StartFlyover(new EmptyFlyout());
@@ -550,6 +1263,9 @@ namespace AasxPackageExplorer
             if (cmd == "submodelwrite")
                 CommandBinding_SubmodelWrite();
 
+            if (cmd == "rdfread")
+                CommandBinding_RDFRead();
+
             if (cmd == "submodelput")
                 CommandBinding_SubmodelPut();
 
@@ -625,6 +1341,9 @@ namespace AasxPackageExplorer
             if (cmd == "exportuml")
                 CommandBinding_ExportImportTableUml(exportUml: true);
 
+            if (cmd == "importtimeseries")
+                CommandBinding_ExportImportTableUml(importTimeSeries: true);
+
             if (cmd == "serverpluginemptysample")
                 CommandBinding_ExecutePluginServer(
                     "EmptySample", "server-start", "server-stop", "Empty sample plug-in.");
@@ -643,7 +1362,9 @@ namespace AasxPackageExplorer
             if (cmd == "convertelement")
                 CommandBinding_ConvertElement();
 
-            if (cmd == "toolsfindtext" || cmd == "toolsfindforward" || cmd == "toolsfindbackward")
+            if (cmd == "toolsfindtext" || cmd == "toolsfindforward" || cmd == "toolsfindbackward"
+                || cmd == "toolsreplacetext" || cmd == "toolsreplacestay" || cmd == "toolsreplaceforward"
+                || cmd == "toolsreplaceall")
                 CommandBinding_ToolsFind(cmd);
 
             if (cmd == "checkandfix")
@@ -664,6 +1385,9 @@ namespace AasxPackageExplorer
             {
                 PanelConcurrentSetVisibleIfRequired(PanelConcurrentCheckIsVisible());
             }
+
+            if (cmd == "exportsubmodeljsonschema")
+                CommandBinding_ExportSubmodelJsonSchema();
         }
 
         public void CommandBinding_TDImport()
@@ -890,10 +1614,20 @@ namespace AasxPackageExplorer
                 if (!uc.Result)
                     return;
 
-                var fr = new PackageContainerListHttpRestRepository(uc.Text);
-                await fr.SyncronizeFromServerAsync();
-                this.UiAssertFileRepository(visible: true);
-                _packageCentral.Repositories.AddAtTop(fr);
+                if (uc.Text.Contains("asp.net"))
+                {
+                    var fileRepository = new PackageContainerAasxFileRepository(uc.Text);
+                    fileRepository.GeneratePackageRepository();
+                    this.UiAssertFileRepository(visible: true);
+                    _packageCentral.Repositories.AddAtTop(fileRepository);
+                }
+                else
+                {
+                    var fr = new PackageContainerListHttpRestRepository(uc.Text);
+                    await fr.SyncronizeFromServerAsync();
+                    this.UiAssertFileRepository(visible: true);
+                    _packageCentral.Repositories.AddAtTop(fr);
+                }
             }
 
             if (cmd == "filerepoquery")
@@ -1606,10 +2340,15 @@ namespace AasxPackageExplorer
             if (res == true)
             {
                 RememberForInitialDirectory(dlg.FileName);
-                using (var s = new StreamWriter(dlg.FileName))
+                using (var streamWriter = new StreamWriter(dlg.FileName))
                 {
-                    var json = JsonConvert.SerializeObject(obj, Formatting.Indented);
-                    s.WriteLine(json);
+                    var serializerSettings = new JsonSerializerSettings();
+                    serializerSettings.NullValueHandling = NullValueHandling.Ignore;
+                    serializerSettings.Formatting = Formatting.Indented;
+                    serializerSettings.ReferenceLoopHandling = ReferenceLoopHandling.Serialize;
+
+                    var json = JsonConvert.SerializeObject(obj, serializerSettings);
+                    streamWriter.WriteLine(json);
                 }
             }
             if (Options.Curr.UseFlyovers) this.CloseFlyover();
@@ -2119,6 +2858,50 @@ namespace AasxPackageExplorer
             if (Options.Curr.UseFlyovers) this.CloseFlyover();
         }
 
+        public void CommandBinding_RDFRead()
+
+        {
+            VisualElementSubmodelRef ve = null;
+            if (DisplayElements.SelectedItem != null && DisplayElements.SelectedItem is VisualElementSubmodelRef)
+                ve = DisplayElements.SelectedItem as VisualElementSubmodelRef;
+
+            if (ve == null || ve.theSubmodel == null || ve.theEnv == null)
+            {
+                MessageBoxFlyoutShow(
+                    "No valid SubModel selected.", "Import", AnyUiMessageBoxButton.OK, AnyUiMessageBoxImage.Error);
+                return;
+            }
+
+            // ok!
+            if (Options.Curr.UseFlyovers) this.StartFlyover(new EmptyFlyout());
+
+            var dlg = new Microsoft.Win32.OpenFileDialog();
+            dlg.InitialDirectory = DetermineInitialDirectory(_packageCentral.MainItem.Filename);
+            dlg.Title = "Select RDF file to be imported";
+            dlg.Filter = "BAMM files (*.ttl)|*.ttl|All files (*.*)|*.*";
+            if (Options.Curr.UseFlyovers) this.StartFlyover(new EmptyFlyout());
+            var res = dlg.ShowDialog();
+            if (res == true)
+                try
+                {
+                    // do it
+                    RememberForInitialDirectory(dlg.FileName);
+                    AasxBammRdfImExport.BAMMRDFimport.ImportInto(
+                        dlg.FileName, ve.theEnv, ve.theSubmodel, ve.theSubmodelRef);
+                    // redisplay
+                    RedrawAllAasxElements();
+                    RedrawElementView();
+                }
+                catch (Exception ex)
+                {
+                    Log.Singleton.Error(ex, "When importing, an error occurred");
+                }
+
+            if (Options.Curr.UseFlyovers) this.CloseFlyover();
+        }
+
+
+
         public void CommandBinding_ExportAML()
         {
             // get the output file
@@ -2412,7 +3195,8 @@ namespace AasxPackageExplorer
             DispEditEntityPanel.AddWishForOutsideAction(new AnyUiLambdaActionRedrawAllElements(bo));
         }
 
-        public void CommandBinding_ExportImportTableUml(bool import = false, bool exportUml = false)
+        public void CommandBinding_ExportImportTableUml(
+            bool import = false, bool exportUml = false, bool importTimeSeries = false)
         {
             // trivial things
             if (!_packageCentral.MainAvailable)
@@ -2423,7 +3207,7 @@ namespace AasxPackageExplorer
                 return;
             }
 
-            // a SubmodelRef shall be exported
+            // a SubmodelRef shall be exported/ imported
             VisualElementSubmodelRef ve1 = null;
             if (DisplayElements.SelectedItem != null && DisplayElements.SelectedItem is VisualElementSubmodelRef)
                 ve1 = DisplayElements.SelectedItem as VisualElementSubmodelRef;
@@ -2431,7 +3215,7 @@ namespace AasxPackageExplorer
             if (ve1 == null || ve1.theSubmodel == null || ve1.theEnv == null)
             {
                 MessageBoxFlyoutShow(
-                    "No valid Submodel selected for exporting/ importing.", "Export table or UML",
+                    "No valid Submodel selected for exporting/ importing.", "Export table/ UML/ time series",
                     AnyUiMessageBoxButton.OK, AnyUiMessageBoxImage.Error);
                 return;
             }
@@ -2441,6 +3225,8 @@ namespace AasxPackageExplorer
             var actionName = (!import) ? "export-submodel" : "import-submodel";
             if (exportUml)
                 actionName = "export-uml";
+            if (importTimeSeries)
+                actionName = "import-time-series";
             var pi = Plugins.FindPluginInstance(pluginName);
             if (pi == null || !pi.HasAction(actionName))
             {
@@ -2674,11 +3460,14 @@ namespace AasxPackageExplorer
             if (ToolsGrid == null || TabControlTools == null || TabItemToolsFind == null || ToolFindReplace == null)
                 return;
 
-            if (cmd == "toolsfindtext")
+            if (cmd == "toolsfindtext" || cmd == "toolsreplacetext")
             {
                 // make panel visible
                 ToolsGrid.Visibility = Visibility.Visible;
                 TabControlTools.SelectedItem = TabItemToolsFind;
+
+                // do not show Replace
+                ToolFindReplace.ShowReplace(cmd == "toolsreplacetext");
 
                 // set the link to the AAS environment
                 // Note: dangerous, as it might change WHILE the find tool is opened!
@@ -2845,6 +3634,48 @@ namespace AasxPackageExplorer
             // Redraw for changes to be visible
             RedrawAllAasxElements();
             //-----------------------------------
+        }
+        public void CommandBinding_ExportSubmodelJsonSchema()
+        {
+            // trivial things
+            if (!_packageCentral.MainAvailable)
+            {
+                MessageBoxFlyoutShow(
+                    "An AASX package needs to be open", "Error",
+                    AnyUiMessageBoxButton.OK, AnyUiMessageBoxImage.Exclamation);
+                return;
+            }
+
+            // a SubmodelRef shall be exported/ imported
+            VisualElementSubmodelRef ve1 = null;
+            if (DisplayElements.SelectedItem != null && DisplayElements.SelectedItem is VisualElementSubmodelRef)
+                ve1 = DisplayElements.SelectedItem as VisualElementSubmodelRef;
+
+            if (ve1 == null || ve1.theSubmodel == null || ve1.theEnv == null)
+            {
+                MessageBoxFlyoutShow(
+                    "No valid Submodel Template selected for exporting the JSON Schema", "Export JSON Schema",
+                    AnyUiMessageBoxButton.OK, AnyUiMessageBoxImage.Error);
+                return;
+            }
+
+            var jsonSchemaExporter = new SubmodelTemplateJsonSchemaExporterV20();
+            var schema = jsonSchemaExporter.ExportSchema(ve1.theSubmodel);
+
+            var saveFileDialog = new Microsoft.Win32.SaveFileDialog();
+            saveFileDialog.InitialDirectory = DetermineInitialDirectory(_packageCentral.MainItem.Filename);
+            saveFileDialog.FileName = "Submodel_Schema_" + ve1.theSubmodel.idShort + ".json";
+            saveFileDialog.Filter = "JSON files (*.JSON)|*.json|All files (*.*)|*.*";
+            if (Options.Curr.UseFlyovers) this.StartFlyover(new EmptyFlyout());
+            var res = saveFileDialog.ShowDialog();
+            if (res == true)
+            {
+                using (var s = new StreamWriter(saveFileDialog.FileName))
+                {
+                    s.Write(schema);
+                }
+            }
+            if (Options.Curr.UseFlyovers) this.CloseFlyover();
         }
     }
 }

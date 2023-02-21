@@ -559,15 +559,18 @@ namespace AdminShellNS
                             Formatting = Newtonsoft.Json.Formatting.Indented
                         };
 
-                        using (var sw = new StreamWriter(s))
+                        var sw = new StreamWriter(s);
+                        var writer = new JsonTextWriter(sw);
+
+                        serializer.Serialize(writer, _aasEnv);
+                        writer.Flush();
+                        sw.Flush();
+                        s.Flush();
+
+                        if (useMemoryStream == null)
                         {
-                            using (var writer = new JsonTextWriter(sw))
-                            {
-                                serializer.Serialize(writer, _aasEnv);
-                                writer.Flush();
-                                sw.Flush();
-                                s.Flush();
-                            }
+                            writer.Close();
+                            sw.Close();
                         }
                     }
                     finally
@@ -1025,7 +1028,7 @@ namespace AdminShellNS
         {
             // access
             if (_openPackage == null)
-                throw (new Exception(string.Format($"AASX Package {_fn} not opened. Aborting!")));
+                return false;
             if (uriString == null || uriString == "" || !uriString.StartsWith("/"))
                 return false;
 
@@ -1040,11 +1043,16 @@ namespace AdminShellNS
             if (_openPackage == null)
                 throw (new Exception(string.Format($"AASX Package {_fn} not opened. Aborting!")));
 
-            // gte part
-            var part = _openPackage.GetPart(new Uri(uriString, UriKind.RelativeOrAbsolute));
+            // exist
+            var puri = new Uri(uriString, UriKind.RelativeOrAbsolute);
+            if (!_openPackage.PartExists(puri))
+                throw (new Exception(string.Format($"AASX Package has no part {uriString}. Aborting!")));
+
+            // get part
+            var part = _openPackage.GetPart(puri);
             if (part == null)
                 throw (new Exception(
-                    string.Format($"Cannot access URI {uriString} in {_fn} not opened. Aborting!")));
+                    string.Format($"Cannot access part {uriString} in {_fn}. Aborting!")));
             return part.GetStream(mode);
         }
 
@@ -1318,6 +1326,12 @@ namespace AdminShellNS
             _openPackage = null;
             _fn = "";
             _aasEnv = null;
+        }
+
+        public void Flush()
+        {
+            if (_openPackage != null)
+                _openPackage.Flush();
         }
 
         public void Dispose()

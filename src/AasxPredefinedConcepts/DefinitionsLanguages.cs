@@ -13,10 +13,12 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
+// ReSharper disable UnusedType.Global
+
 namespace AasxPredefinedConcepts
 {
     public static class DefinitionsLanguages
     {
-        public static string[] DefaultLanguages = new string[] { "en", "de", "fr", "es", "it", "cn", "kr", "jp" };
+        public static string[] DefaultLanguages = new string[] { "en", "de", "fr", "es", "it", "zh", "kr", "jp" };
     }
 }

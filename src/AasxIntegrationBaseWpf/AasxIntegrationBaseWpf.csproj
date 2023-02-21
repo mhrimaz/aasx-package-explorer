@@ -5,6 +5,9 @@
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <UseWPF>true</UseWPF>
   </PropertyGroup>
+  <PropertyGroup>
+	<ErrorOnDuplicatePublishOutputFiles>false</ErrorOnDuplicatePublishOutputFiles>
+  </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\AasxCsharpLibrary\AasxCsharpLibrary.csproj" />
     <ProjectReference Include="..\AasxIntegrationBase\AasxIntegrationBase.csproj" />
@@ -27,5 +30,13 @@
     <Page Remove="OriginalResources\IconPencil.xaml" />
     <Page Remove="OriginalResources\ListBars.xaml" />
     <Page Remove="OriginalResources\ListTiles.xaml" />
+  </ItemGroup>
+  <ItemGroup>
+    <Page Update="AasForms\FormSubControlCapability.xaml">
+      <XamlRuntime>$(DefaultXamlRuntime)</XamlRuntime>
+    </Page>
+    <Page Update="AasForms\FormSubControlRelationshipElement.xaml">
+      <XamlRuntime>$(DefaultXamlRuntime)</XamlRuntime>
+    </Page>
   </ItemGroup>
 </Project>
